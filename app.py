@@ -1,29 +1,39 @@
 import os
+import glob
 import logging
+import tempfile
 from datetime import datetime, timezone
 from typing import Tuple, Dict, Any, List, Optional
 
 import numpy as np
 import pandas as pd
+import pyvista as pv
+
+try:
+    import nest_asyncio2
+    nest_asyncio2.apply()
+except ImportError:
+    pass
+
+# Off-screen rendering for server deployment
+pv.OFF_SCREEN = True
+pv.set_jupyter_backend('static')
+
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from authlib.integrations.flask_client import OAuth
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy.exc import IntegrityError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("cardiac")
 
-# ==========================================
-# ML Predict Module Setup
-# ==========================================
+# Load Predict Module
 try:
     from predict import predict_patient
-
     PREDICT_MODULE_LOADED = True
     MODULE_ERROR = None
 except Exception as e:
@@ -32,43 +42,29 @@ except Exception as e:
     MODULE_ERROR = str(e)
     log.error("predict module import failed: %s", MODULE_ERROR)
 
-# ==========================================
-# Flask Application & Config
-# ==========================================
 app = Flask(__name__)
-
-# Render terminates TLS at its proxy; trust its forwarded headers so
-# url_for(_external=True) produces https:// URLs (needed for Google OAuth).
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
-
-# Required: crash at startup if missing, so workers never use different random keys.
-app.secret_key = os.environ["FLASK_SECRET_KEY"]
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-heart-check")
 
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    # Secure cookies by default. For local http dev only: export INSECURE_COOKIES=1
     SESSION_COOKIE_SECURE=os.environ.get("INSECURE_COOKIES") != "1",
-    MAX_CONTENT_LENGTH=256 * 1024,  # 256 KB request cap
+    MAX_CONTENT_LENGTH=256 * 1024,
 )
 
 DEBUG = os.environ.get("FLASK_DEBUG") == "1"
-REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "1") == "1"  # on by default
+REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "1") == "1"
 MAX_BATCH = 50
 
 if os.environ.get("OAUTH_INSECURE_LOCAL") == "1":
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-# NOTE: memory:// storage is per-worker. Fine for a demo; use Redis for strict limits.
 limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
 
-# ==========================================
-# Database Configuration
-# ==========================================
-db_url = os.environ["DATABASE_URL"]  # no fallback: never hardcode credentials
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Force the psycopg2 driver: SQLAlchemy 2.1 defaults plain postgresql:// to psycopg v3,
-# which isn't installed (we use psycopg2-binary). Also fixes legacy postgres:// URLs.
+db_url = os.environ.get("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "cardiac_app.db"))
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
 elif db_url.startswith("postgresql://"):
@@ -76,58 +72,35 @@ elif db_url.startswith("postgresql://"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 
 db = SQLAlchemy(app)
 
-
-# ==========================================
-# Database Models
-# ==========================================
 class User(db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=True)
     provider = db.Column(db.String(20), default="local")
-    created_at = db.Column(
-        db.DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc)
-    )
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     assessments = db.relationship("Assessment", backref="user", lazy=True, cascade="all, delete-orphan")
-
 
 class Assessment(db.Model):
     __tablename__ = "assessments"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
-    timestamp = db.Column(
-        db.DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc)
-    )
+    timestamp = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     input_data = db.Column(db.JSON, nullable=False)
     result_data = db.Column(db.JSON, nullable=False)
 
-
-@app.cli.command("init-db")
-def init_db():
-    """Create tables once: `flask --app app init-db`"""
-    db.create_all()
-    print("tables created")
-
-
-# Demo convenience only (use with --workers 1): set AUTO_CREATE_DB=1
-if os.environ.get("AUTO_CREATE_DB") == "1":
-    with app.app_context():
+with app.app_context():
+    try:
         db.create_all()
+    except Exception as ex:
+        log.warning("Database auto-creation skipped or failed: %s", ex)
 
-
-# ==========================================
-# OAuth Setup
-# ==========================================
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
-
 oauth = OAuth(app)
 google = None
 if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
@@ -138,10 +111,6 @@ if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={"scope": "openid email profile"},
     )
-else:
-    log.warning("Google OAuth disabled: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured.")
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FEATURE_ORDER = [
     "Age", "Weight", "Length", "Sex", "BMI", "DM", "HTN", "Current Smoker", "EX-Smoker",
@@ -154,23 +123,15 @@ FEATURE_ORDER = [
 ]
 
 _NORMALISED = {c.lower().replace(" ", "").replace("_", "").replace("-", ""): c for c in FEATURE_ORDER}
-
 VESSELS = ("LAD", "LCX", "RCA")
 POSITIVE_TERMS = {"cad", "disease", "positive", "yes", "stenosis"}
-
 
 def _norm(col: str) -> str:
     return str(col).lower().replace(" ", "").replace("_", "").replace("-", "")
 
-
-# ==========================================
-# Helpers & Data Cleaning
-# ==========================================
 def build_input_frame(rows: List[Dict[str, Any]]) -> Tuple[Optional[pd.DataFrame], Optional[Dict[str, Any]]]:
-    """Normalise column names, validate feature presence, and coerce numeric values."""
     df = pd.DataFrame(rows)
     df = df.rename(columns={c: _NORMALISED.get(_norm(c), c) for c in df.columns})
-
     df = df.replace(r"^\s*$", np.nan, regex=True)
 
     for c in df.select_dtypes(include=["object", "string"]).columns:
@@ -182,7 +143,6 @@ def build_input_frame(rows: List[Dict[str, Any]]) -> Tuple[Optional[pd.DataFrame
         return None, {"error": "Missing features", "missing": missing, "unexpected": extra}
 
     df = df[FEATURE_ORDER].copy()
-
     for c in df.columns:
         converted = pd.to_numeric(df[c], errors="coerce")
         if converted.isna().sum() == df[c].isna().sum():
@@ -190,9 +150,7 @@ def build_input_frame(rows: List[Dict[str, Any]]) -> Tuple[Optional[pd.DataFrame
 
     return df, None
 
-
 def clean_json(val: Any) -> Any:
-    """Recursively convert NumPy types to Python primitives and NaN/Inf to None (valid for Postgres JSON)."""
     if isinstance(val, dict):
         return {k: clean_json(v) for k, v in val.items()}
     if isinstance(val, (list, tuple)):
@@ -203,23 +161,16 @@ def clean_json(val: Any) -> Any:
         return None
     return val
 
-
-def sanitize_dict_types(data: Dict[str, Any]) -> Dict[str, Any]:
-    return clean_json(data)
-
-
 def get_current_user() -> Optional[User]:
     email = session.get("user_email")
     if not email:
         return None
     return User.query.filter_by(email=email).first()
 
-
 def login_required_check():
     if REQUIRE_LOGIN and not get_current_user():
         return jsonify({"error": "Authentication required to perform this action."}), 401
     return None
-
 
 def _is_positive(raw: Any) -> int:
     s = str(raw).strip().lower()
@@ -228,7 +179,6 @@ def _is_positive(raw: Any) -> int:
     except ValueError:
         return 1 if s in POSITIVE_TERMS else 0
 
-
 def _safe_prob(raw: Any) -> float:
     try:
         p = float(raw)
@@ -236,11 +186,8 @@ def _safe_prob(raw: Any) -> float:
         return 0.0
     return 0.0 if (np.isnan(p) or np.isinf(p)) else p
 
-
 def process_single_patient_prediction(patient_data_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Runs prediction model on single patient record and formats risk markers."""
     raw_results = predict_patient(patient_data_dict)
-
     formatted_results = {}
     vessels_positive = []
     vessel_probs = []
@@ -262,13 +209,11 @@ def process_single_patient_prediction(patient_data_dict: Dict[str, Any]) -> Dict
             vessel_probs.append(raw_prob)
 
     cath_res = formatted_results.get("CATH", {})
-
     if vessels_positive:
         label = f"Vessel Disease ({', '.join(vessels_positive)})"
     elif cath_res.get("prediction") == 1:
         label = "Coronary Artery Disease Indicated"
     else:
-        # Deliberately not phrased as reassurance. Update the UI copy to match.
         label = "No vessel disease flagged by model"
 
     headline_prob = max(vessel_probs) if vessel_probs else cath_res.get("probability", 0.0)
@@ -280,43 +225,185 @@ def process_single_patient_prediction(patient_data_dict: Dict[str, Any]) -> Dict
         "results": formatted_results,
     }
 
-
-# ==========================================
-# Routes: Base & Health Checks
-# ==========================================
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
-
-@app.route("/health", methods=["GET"])
-def health():
+@app.route("/render-heart-html")
+def render_heart_html():
     try:
-        db.session.execute(text("SELECT 1"))
-        db_ok = True
-    except Exception:
-        log.exception("Health check DB failure")
-        db_ok = False
+        folder_name = os.path.join(BASE_DIR, "heart_folder")
+        if not os.path.exists(folder_name):
+            return f"<div style='color:white;padding:20px;'>Folder '{folder_name}' not found.</div>", 404
 
-    ok = db_ok and PREDICT_MODULE_LOADED
-    return jsonify({
-        "status": "online" if ok else "degraded",
-        "predict_module_loaded": PREDICT_MODULE_LOADED,
-        "database_connected": db_ok,
-        "n_features_expected": len(FEATURE_ORDER),
-    }), (200 if ok else 503)
+        # Case-insensitive OBJ file search
+        obj_files = glob.glob(os.path.join(folder_name, "*.obj")) + glob.glob(os.path.join(folder_name, "*.OBJ"))
+        if not obj_files:
+            return "<div style='color:white;padding:20px;'>No .obj or .OBJ files found inside 'heart_folder'.</div>", 404
 
+        bpm = float(request.args.get("bpm", 70))
+        atrial_amp = float(request.args.get("atrial_amp", 0.10))
+        vent_amp = float(request.args.get("vent_amp", 0.15))
+        cut_axis = request.args.get("cut_axis", "y")
+        cut_val = float(request.args.get("cut_val", 0))
+        mesh_opacity = float(request.args.get("opacity", 1.0))
 
-# ==========================================
-# Routes: Authentication
-# ==========================================
+        color_map = {
+            1: request.args.get("c_red", "#FF0000"),
+            2: request.args.get("c_orange", "#FF7F00"),
+            3: request.args.get("c_yellow", "#FFFF00"),
+            4: request.args.get("c_green", "#00FF00"),
+            5: request.args.get("c_blue", "#007FFF")
+        }
+
+        submeshes = []
+        z_centroids = []
+        for filepath in sorted(list(set(obj_files))):
+            try:
+                m = pv.read(filepath)
+                # Ensure MultiBlock datasets are correctly converted to PolyData
+                if isinstance(m, pv.MultiBlock):
+                    poly = m.combine().extract_surface()
+                elif isinstance(m, pv.PolyData):
+                    poly = m
+                else:
+                    poly = m.extract_surface()
+
+                if poly.n_points > 0:
+                    submeshes.append(poly)
+                    z_centroids.append(poly.center[2])
+            except Exception as read_ex:
+                log.warning("Skipping file %s: %s", filepath, read_ex)
+                continue
+
+        if not submeshes:
+            return "<div style='color:white;padding:20px;'>Failed to parse any valid 3D geometry from OBJ files.</div>", 500
+
+        z_min, z_max = min(z_centroids), max(z_centroids)
+        z_range = z_max - z_min + 1e-6
+
+        combined = submeshes[0].merge(submeshes[1:])
+        bounds = combined.bounds
+        y_min_g, y_max_g = bounds[2], bounds[3]
+        z_min_g, z_max_g = bounds[4], bounds[5]
+        y_range = y_max_g - y_min_g
+        z_range = z_max_g - z_min_g
+
+        plotter = pv.Plotter(window_size=[900, 600], off_screen=True)
+        plotter.set_background("#0e1117")
+
+        if mesh_opacity < 1.0:
+            plotter.enable_depth_peeling(number_of_peels=4, occlusion_ratio=0.0)
+
+        for mesh, z_c in zip(submeshes, z_centroids):
+            z_norm = (z_c - z_min) / z_range
+            if z_norm < 0.20: zone_id = 1
+            elif z_norm < 0.40: zone_id = 2
+            elif z_norm < 0.60: zone_id = 3
+            elif z_norm < 0.80: zone_id = 4
+            else: zone_id = 5
+
+            zone_color = color_map.get(zone_id, "#FFFFFF")
+
+            if cut_axis == "y":
+                if cut_val > 0:
+                    cut_y = y_max_g - ((cut_val / 100.0) * y_range)
+                    clipped_mesh = mesh.clip(normal=(0, 1, 0), origin=(0, cut_y, 0))
+                elif cut_val < 0:
+                    cut_y = y_min_g + ((abs(cut_val) / 100.0) * y_range)
+                    clipped_mesh = mesh.clip(normal=(0, -1, 0), origin=(0, cut_y, 0))
+                else:
+                    clipped_mesh = mesh
+            else:
+                if cut_val > 0:
+                    cut_z = z_max_g - ((cut_val / 100.0) * z_range)
+                    clipped_mesh = mesh.clip(normal=(0, 0, 1), origin=(0, 0, cut_z))
+                elif cut_val < 0:
+                    cut_z = z_min_g + ((abs(cut_val) / 100.0) * z_range)
+                    clipped_mesh = mesh.clip(normal=(0, 0, -1), origin=(0, 0, cut_z))
+                else:
+                    clipped_mesh = mesh
+
+            if clipped_mesh.n_points > 0:
+                plotter.add_mesh(
+                    clipped_mesh,
+                    color=zone_color,
+                    opacity=mesh_opacity,
+                    smooth_shading=True,
+                    specular=0.5,
+                    specular_power=20,
+                    show_edges=False,
+                )
+
+        plotter.reset_camera()
+        plotter.camera.zoom(1.2)
+
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".html")
+        os.close(temp_fd)
+        try:
+            plotter.export_html(temp_path)
+            with open(temp_path, "r", encoding="utf-8") as f:
+                html_content = f.read()
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        js_chamber_animation = f"""
+        <script>
+        (function checkVTK() {{
+            const canvas = document.querySelector('canvas');
+            if (!canvas) {{
+                setTimeout(checkVTK, 100);
+                return;
+            }}
+
+            const bpm = {bpm};
+            const atriaAmp = {atrial_amp};
+            const ventAmp = {vent_amp};
+            const freq = (bpm / 60.0) * 2.0 * Math.PI;
+            const startTime = performance.now();
+
+            function animate() {{
+                const t = (performance.now() - startTime) / 1000.0;
+                const cyclePhase = (freq * t) % (2.0 * Math.PI);
+
+                const atrialPulse = Math.sin(cyclePhase) > 0 ? Math.sin(cyclePhase) : 0;
+                const ventPhase = cyclePhase - 0.8;
+                const ventPulse = Math.sin(ventPhase) > 0 ? Math.pow(Math.sin(ventPhase), 2) : 0;
+
+                const scaleAtriaX = 1.0 - (atriaAmp * atrialPulse);
+                const scaleAtriaY = 1.0 - (atriaAmp * 0.5 * atrialPulse);
+                const scaleVentX  = 1.0 - (ventAmp * ventPulse);
+                const scaleVentY  = 1.0 - (ventAmp * 0.3 * ventPulse);
+                const scaleZ = 1.0 - (atriaAmp * 0.3 * atrialPulse + ventAmp * 0.5 * ventPulse);
+
+                canvas.style.transform = `matrix3d(
+                    ${{scaleAtriaX}}, 0, 0, 0,
+                    0, ${{scaleVentY}}, 0, 0,
+                    0, 0, ${{scaleZ}}, 0,
+                    0, 0, 0, 1
+                )`;
+                canvas.style.transformOrigin = 'center center';
+
+                requestAnimationFrame(animate);
+            }}
+            animate();
+        }})();
+        </script>
+        """
+
+        return html_content + js_chamber_animation
+
+    except Exception as e:
+        log.exception("Error rendering 3D heart model")
+        return f"<div style='color:#EF7480;padding:20px;font-family:sans-serif;'><h3>Failed to render 3D Heart Model</h3><p>{str(e)}</p></div>", 500
+
 @app.route("/login/google")
 def google_login():
     if google is None:
         return jsonify({"error": "Google login is not configured on this server."}), 503
     redirect_uri = url_for("google_callback", _external=True)
     return google.authorize_redirect(redirect_uri)
-
 
 @app.route("/login/google/callback")
 def google_callback():
@@ -331,7 +418,6 @@ def google_callback():
         email = user_info["email"].lower()
         user = User.query.filter_by(email=email).first()
         if user and user.provider != "google":
-            # Prevents pre-hijacking via an attacker-created local account.
             return redirect("/?error=account_exists_use_password")
         if not user:
             user = User(email=email, provider="google")
@@ -346,14 +432,12 @@ def google_callback():
         log.exception("Google OAuth callback failed")
         return redirect("/?error=oauth_failed")
 
-
 @app.route("/api/me", methods=["GET"])
 def check_me():
     user = get_current_user()
     if user:
         return jsonify({"logged_in": True, "email": user.email})
     return jsonify({"logged_in": False})
-
 
 @app.route("/login", methods=["POST"])
 @limiter.limit("10 per minute")
@@ -369,7 +453,6 @@ def login():
         return jsonify({"status": "success", "email": user.email})
     return jsonify({"status": "error", "message": "Invalid email or password."}), 401
 
-
 @app.route("/signup", methods=["POST"])
 @limiter.limit("5 per minute")
 def signup():
@@ -381,8 +464,6 @@ def signup():
         return jsonify({"status": "error", "message": "Valid email required."}), 400
     if len(password) < 8:
         return jsonify({"status": "error", "message": "Password must be at least 8 characters long."}), 400
-    if len(password) > 256:
-        return jsonify({"status": "error", "message": "Password too long."}), 400
 
     if User.query.filter_by(email=email).first():
         return jsonify({"status": "error", "message": "An account with this email already exists."}), 400
@@ -399,16 +480,11 @@ def signup():
     session["user_email"] = user.email
     return jsonify({"status": "success", "email": user.email})
 
-
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return jsonify({"status": "success"})
 
-
-# ==========================================
-# Routes: Assessment History
-# ==========================================
 @app.route("/api/history", methods=["GET"])
 def get_history():
     user = get_current_user()
@@ -427,7 +503,6 @@ def get_history():
     ]
     return jsonify(history)
 
-
 @app.route("/api/history/<int:record_id>", methods=["DELETE"])
 def delete_history(record_id: int):
     user = get_current_user()
@@ -441,10 +516,6 @@ def delete_history(record_id: int):
         return jsonify({"status": "success"})
     return jsonify({"error": "Record not found"}), 404
 
-
-# ==========================================
-# Routes: Inference & Auto-Save
-# ==========================================
 @app.route("/predict", methods=["POST"])
 @limiter.limit("30 per minute")
 def predict():
@@ -483,18 +554,16 @@ def predict():
             patient_data_dict = input_df.iloc[idx].to_dict()
             response_payload = clean_json(process_single_patient_prediction(patient_data_dict))
 
-            # Only persist for authenticated users; anonymous rows would be unreachable.
             if user:
                 db.session.add(Assessment(
                     user_id=user.id,
-                    input_data=sanitize_dict_types(patient_data_dict),
+                    input_data=clean_json(patient_data_dict),
                     result_data=response_payload,
                 ))
             evaluations.append(response_payload)
 
         if user:
             db.session.commit()
-            log.info("Persisted %d assessment record(s).", len(evaluations))
 
     except Exception:
         db.session.rollback()
@@ -507,7 +576,6 @@ def predict():
     if len(evaluations) == 1:
         return jsonify(evaluations[0])
     return jsonify({"status": "success", "batch_count": len(evaluations), "evaluations": evaluations})
-
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=DEBUG)
