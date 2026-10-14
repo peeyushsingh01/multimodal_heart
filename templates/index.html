@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heart Check - Cardiac Risk Assessment</title>
+
+<!-- Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,400..700;1,400..700&family=Literata:ital,opsz,wght@0,7..72,500;0,7..72,700;1,7..72,500;1,7..72,700&display=swap" rel="stylesheet">
+
+<!-- 3D WebGL Engine & Loaders -->
+<script defer src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+
+<style>
+:root{
+  --bg:#FAF4F4; --surface:#FFFFFF; --ink:#1B2430; --muted:#5B6672; --line:#E6DCDC;
+  --accent:#B3202F; --accent-ink:#FFFFFF; --ok:#0E7C6B; --watch:#B7791F; --high:#B3202F;
+  --grid:rgba(179,32,47,.11); --grid2:rgba(179,32,47,.055);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#15181D;--surface:#1E2229;--ink:#E9ECEF;--muted:#9AA4AF;--line:#2E343C;--accent:#E5626F;--accent-ink:#1A0B0D;--ok:#3CBFA8;--watch:#E0A84A;--high:#EF7480;--grid:rgba(229,98,111,.14);--grid2:rgba(229,98,111,.07)}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 'Figtree',system-ui,sans-serif}
+h1,h2,h3,h4{font-family:'Literata',Georgia,serif;line-height:1.2;margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
+.brand{display:flex;align-items:center;gap:10px;font-family:'Literata',Georgia,serif;font-weight:700;font-size:1.25rem;color:var(--accent)}
+main{max-width:1120px;margin:0 auto;padding:32px 20px 72px}
+
+/* LOGIN VIEW */
+.login-wrap{min-height:75vh;display:grid;place-items:center}
+.login-card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:36px;width:100%;max-width:420px;box-shadow:0 8px 24px rgba(0,0,0,0.04)}
+.login-card h2{text-align:center;margin-bottom:8px}
+.login-card p.sub{text-align:center;color:var(--muted);font-size:0.95rem;margin-bottom:24px}
+.inp-group{display:flex;flex-direction:column;gap:14px;margin-bottom:20px}
+.inp-field{display:flex;flex-direction:column;gap:6px}
+.inp-field label{font-size:0.9rem;font-weight:600}
+.inp-field input{padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+.btn-primary{width:100%;min-height:48px;border-radius:10px;border:none;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:1rem;margin-top:6px}
+.divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:0.85rem}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--line)}
+.btn-google{width:100%;min-height:48px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px}
+
+/* DASHBOARD HUB VIEW */
+.hub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;margin-top:24px}
+.hub-card{background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:32px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:16px;transition:transform 0.2s,border-color 0.2s;cursor:pointer}
+.hub-card:hover{transform:translateY(-4px);border-color:var(--accent)}
+.hub-icon{width:72px;height:72px;border-radius:50%;background:color-mix(in srgb,var(--accent) 12%,transparent);display:grid;place-items:center;color:var(--accent)}
+.hub-card h3{font-size:1.4rem}
+.hub-card p{color:var(--muted);font-size:0.95rem;margin:0}
+
+/* FORM WIZARD & HISTORY */
+.cols{display:grid;gap:24px}
+@media(min-width:900px){.cols{grid-template-columns:360px 1fr;align-items:start}.cols>aside{position:sticky;top:84px}}
+.paper{background-color:var(--surface);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:50px 50px}
+.heart-slot{border:1px solid var(--line);border-radius:16px;height:380px;position:relative;display:grid;place-items:center;overflow:hidden}
+.wiz{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px}
+.prog{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.prog>i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.stepmeta{display:flex;justify-content:space-between;gap:12px;font-size:.9rem;color:var(--muted);margin:10px 0 20px}
+.fld{padding:14px 0;border-top:1px solid var(--line)}
+.row-yn{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.sw{min-width:88px;min-height:42px;border:1px solid var(--line);border-radius:24px;background:var(--bg);display:flex;align-items:center;gap:8px;padding:4px;flex:none}
+.knob{width:32px;height:32px;border-radius:50%;background:var(--line)}
+.sw[aria-checked=true]{flex-direction:row-reverse;border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
+.sw[aria-checked=true] .knob{background:var(--accent)}
+.inp{display:flex;align-items:center;border:1px solid var(--line);border-radius:10px;background:var(--bg);overflow:hidden;max-width:320px;margin-top:6px}
+.inp input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:1.1rem;padding:10px 12px;color:inherit}
+.inp input:focus{outline:none}
+.fld-hint{font-size:0.8rem;color:var(--muted);margin-top:4px}
+.seg button{min-height:42px;padding:8px 16px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-weight:600;margin:4px 4px 0 0}
+.seg button[aria-checked=true]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.nav{display:flex;justify-content:space-between;gap:12px;margin-top:24px}
+.sbtn{min-height:38px;padding:6px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-weight:600}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 8px;border-top:1px solid var(--line)}
+.json{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font:13px/1.5 monospace;max-height:300px}
+.req-star{color:var(--high);font-weight:bold;margin-left:2px}
+.err-banner{background:color-mix(in srgb,var(--high) 12%,transparent);border:1px solid var(--high);color:var(--high);padding:10px 14px;border-radius:10px;font-size:0.9rem;font-weight:600;margin-bottom:16px}
+.vessel-badge{display:inline-block;padding:4px 10px;border-radius:6px;font-size:0.85rem;font-weight:700;margin-right:6px;margin-bottom:6px;background:var(--line);color:var(--ink)}
+.vessel-badge.high{background:color-mix(in srgb,var(--high) 15%,transparent);color:var(--high);border:1px solid var(--high)}
+.vessel-badge.ok{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok);border:1px solid var(--ok)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 17h7l3-9 5 17 4-12 2 4h7" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Heart Check
+  </div>
+  <div id="userHeaderActions" hidden>
+    <span id="userGreeting" style="font-size:0.9rem;color:var(--muted);margin-right:12px;"></span>
+    <button type="button" class="sbtn" onclick="logout()">Logout</button>
+  </div>
+</header>
+
+<main>
+  <!-- ==================== VIEW 1: LOGIN PAGE ==================== -->
+  <section id="view-login" class="login-wrap">
+    <div class="login-card">
+      <h2 id="authTitle">Sign In</h2>
+      <p class="sub">Access your cardiac health assessment portal</p>
+
+      <div id="authErr" style="color:var(--high);font-size:0.85rem;margin-bottom:12px;text-align:center" hidden></div>
+
+      <div class="inp-group">
+        <div class="inp-field">
+          <label>Email Address <span class="req-star">*</span></label>
+          <input type="email" id="authEmail" placeholder="name@example.com" required>
+        </div>
+        <div class="inp-field">
+          <label>Password <span class="req-star">*</span></label>
+          <input type="password" id="authPassword" placeholder="••••••••" required>
+        </div>
+      </div>
+
+      <button type="button" class="btn-primary" onclick="submitAuth()">Sign In</button>
+
+      <div style="text-align:center;margin-top:12px">
+        <button type="button" style="border:none;background:none;color:var(--muted);text-decoration:underline;font-size:0.85rem" id="toggleAuthMode" onclick="switchAuthMode()">Need an account? Sign up</button>
+      </div>
+
+      <div class="divider">OR</div>
+
+      <button type="button" class="btn-google" onclick="googleLogin()">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+        Continue with Google
+      </button>
+    </div>
+  </section>
+
+  <!-- ==================== VIEW 2: DASHBOARD HUB ==================== -->
+  <section id="view-hub" hidden>
+    <h2>Cardiac Care Hub</h2>
+    <p style="color:var(--muted)">Select an option to begin a new test or review past results.</p>
+
+    <div class="hub-grid">
+      <!-- Heart Test Card -->
+      <div class="hub-card" onclick="openHeartTest()">
+        <div class="hub-icon">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
+        </div>
+        <h3>Heart Test</h3>
+        <p>Complete a CAD assessment by filling in your essential medical parameters.</p>
+        <button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none;margin-top:8px">Start Heart Test</button>
+      </div>
+
+      <!-- See History Card -->
+      <div class="hub-card" onclick="openHistory()">
+        <div class="hub-icon">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+        </div>
+        <h3>See History</h3>
+        <p>View prior assessment records, 3D vessel risk highlights, and clinical trends.</p>
+        <button class="sbtn" style="margin-top:8px">View Past Records</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== VIEW 3: WIZARD FORM (HEART TEST) ==================== -->
+  <section id="view-check" hidden>
+    <div style="margin-bottom:16px">
+      <button class="sbtn" onclick="showView('hub')">← Back to Hub</button>
+    </div>
+    <div class="wiz" id="wizard" style="max-width:760px;margin:0 auto"></div>
+  </section>
+
+  <!-- ==================== VIEW 4: DETAILED HISTORY & RESULT DASHBOARD ==================== -->
+  <section id="view-dash" hidden>
+    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+      <button class="sbtn" onclick="showView('hub')">← Back to Hub</button>
+      <button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="openHeartTest()">New Heart Test</button>
+    </div>
+
+    <div class="cols">
+      <aside>
+        <div class="heart-slot paper" id="slot-dash"></div>
+      </aside>
+      <div id="assess"></div>
+    </div>
+
+    <section style="margin-top:32px"><h3>Clinical Parameters</h3><div class="tbl" id="numbers"></div></section>
+    <section style="margin-top:32px"><h3>Past Check-up History</h3><div id="history"></div></section>
+    <section style="margin-top:32px">
+      <details style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--surface)">
+        <summary style="cursor:pointer;font-weight:600">Model Input Payload (JSON)</summary>
+        <pre class="json" id="jsonOut"></pre>
+      </details>
+    </section>
+  </section>
+</main>
+
+<script>
+(function(){
+'use strict';
+
+var API_URL = '/predict';
+var isSignup = false;
+var currentUser = null;
+
+/* =====================================================================
+   VIEW NAVIGATION & SESSION
+   ===================================================================== */
+window.showView = function(v){
+  document.getElementById('view-login').hidden = (v !== 'login');
+  document.getElementById('view-hub').hidden = (v !== 'hub');
+  document.getElementById('view-check').hidden = (v !== 'check');
+  document.getElementById('view-dash').hidden = (v !== 'dash');
+
+  if (v === 'login') {
+    document.getElementById('userHeaderActions').hidden = true;
+  } else {
+    document.getElementById('userHeaderActions').hidden = false;
+    document.getElementById('userGreeting').textContent = currentUser ? currentUser.split('@')[0] : '';
+  }
+};
+
+window.checkSession = function(){
+  fetch('/api/me')
+    .then(r => r.json())
+    .then(data => {
+      if(data.logged_in){
+        currentUser = data.email;
+        window.showView('hub');
+      } else {
+        currentUser = null;
+        window.showView('login');
+      }
+    }).catch(() => window.showView('login'));
+};
+
+window.switchAuthMode = function(){
+  isSignup = !isSignup;
+  document.getElementById('authTitle').textContent = isSignup ? 'Create Account' : 'Sign In';
+  document.getElementById('toggleAuthMode').textContent = isSignup ? 'Already have an account? Sign in' : 'Need an account? Sign up';
+};
+
+window.submitAuth = function(){
+  var email = document.getElementById('authEmail').value;
+  var password = document.getElementById('authPassword').value;
+  var errEl = document.getElementById('authErr');
+  errEl.hidden = true;
+
+  if(!email || !password){
+    errEl.textContent = 'Please enter both email and password.';
+    errEl.hidden = false;
+    return;
+  }
+
+  fetch(isSignup ? '/signup' : '/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: email, password: password})
+  })
+  .then(r => r.json())
+  .then(data => {
+    if(data.status === 'success'){
+      window.checkSession();
+    } else {
+      errEl.textContent = data.message || 'Authentication failed';
+      errEl.hidden = false;
+    }
+  }).catch(() => { errEl.textContent = 'Server connection error'; errEl.hidden = false; });
+};
+
+window.googleLogin = function(){
+  window.location.href = '/login/google';
+};
+
+window.logout = function(){
+  fetch('/logout', {method: 'POST'}).then(() => window.checkSession());
+};
+
+window.openHeartTest = function(){
+  state = freshState();
+  step = 0;
+  window.showView('check');
+  renderWizard();
+};
+
+window.openHistory = function(){
+  window.showView('dash');
+  renderDash();
+};
+
+/* =====================================================================
+   3D THREE.JS VIEWER (LAZY LOADED ON RESULT/HISTORY DASHBOARD)
+   ===================================================================== */
+window.HeartViewer = {
+  instances: new Map(),
+  mount: function(el) {
+    if (!el || typeof THREE === 'undefined' || this.instances.has(el)) return;
+    el.innerHTML = '';
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(45, el.clientWidth / el.clientHeight, 0.1, 1000);
+    camera.position.set(0, 0, 12);
+    var renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(el.clientWidth, el.clientHeight);
+    el.appendChild(renderer.domElement);
+    var controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    var dir = new THREE.DirectionalLight(0xffffff, 1.2);
+    dir.position.set(5, 10, 7);
+    scene.add(dir);
+
+    var regionMeshes = {};
+    var loader = new THREE.GLTFLoader();
+    var draco = new THREE.DRACOLoader();
+    draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    loader.setDRACOLoader(draco);
+
+    loader.load('/static/heart_model.glb', gltf => {
+      scene.add(gltf.scene);
+    }, undefined, () => {
+      var tag = document.createElement('div');
+      tag.className = 'slot-tag';
+      tag.textContent = '3D Heart Visualizer';
+      el.appendChild(tag);
+    });
+
+    function anim(){ requestAnimationFrame(anim); controls.update(); renderer.render(scene, camera); }
+    anim();
+    this.instances.set(el, {scene: scene, regionMeshes: regionMeshes});
+  }
+};
+
+/* =====================================================================
+   AGE CALCULATOR & 55 CAD FEATURES SCHEMA WITH STRICT MIN/MAX RANGES
+   ===================================================================== */
+function calculateAge(dobString) {
+  if (!dobString) return 0;
+  var birthDate = new Date(dobString);
+  var today = new Date();
+  var age = today.getFullYear() - birthDate.getFullYear();
+  var m = today.getMonth() - birthDate.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+    age--;
+  }
+  return age >= 0 ? age : 0;
+}
+
+var BIN={yes:1,no:0}, YN={yes:'Y',no:'N'};
+function yn(k,label,help,enc){return {k:k,label:label,help:help,kind:'yn',t:enc===BIN?'int':'str',yes:enc.yes,no:enc.no};}
+function num(k,label,unit,min,max,t,typ,help){return {k:k,label:label,unit:unit,min:min,max:max,t:t,typ:typ,help:help,kind:'num'};}
+function ch(k,label,help,t,opts,def){return {k:k,label:label,help:help,t:t,opts:opts,def:def,kind:'choice'};}
+function dateFld(k,label,help){return {k:k,label:label,help:help,kind:'date'};}
+
+var FIELDS=[
+  dateFld('DOB','Date of Birth','Select your birth date'),
+  ch('Sex','Sex','','str',[{v:'Male',l:'Male'},{v:'Female',l:'Female'}],'Male'),
+  num('Weight','Weight','kg',30,250,'int','Range: 30 - 250 kg',''),
+  num('Length','Height','cm',120,220,'int','Range: 120 - 220 cm',''),
+  yn('HTN','High blood pressure','Diagnosed hypertension',BIN),
+  yn('DM','Diabetes','Diagnosed diabetes',BIN),
+  yn('DLP','High cholesterol','Diagnosed dyslipidemia',YN),
+  yn('Current Smoker','Current smoker','Smokes currently',BIN),
+  yn('EX-Smoker','Former smoker','Past smoking history',BIN),
+  yn('FH','Family history','Heart disease in family',BIN),
+  yn('CHF','Heart failure','Congestive heart failure',YN),
+  yn('CRF','Chronic kidney failure','Kidney failure',YN),
+  yn('CVA','Previous stroke','Stroke history',YN),
+  yn('Airway disease','Lung disease','Asthma or COPD',YN),
+  yn('Thyroid Disease','Thyroid disease','Thyroid condition',YN),
+  yn('Typical Chest Pain','Typical chest pain','Pressure behind breastbone',BIN),
+  yn('Atypical','Atypical chest pain','Other chest pain',YN),
+  yn('Nonanginal','Non-heart chest pain','Muscle or stomach pain',YN),
+  yn('Exertional CP','Pain during exertion','Chest pain with effort',YN),
+  yn('LowTH Ang','Pain with little effort','Angina at low effort',YN),
+  yn('Dyspnea','Shortness of breath','Breathlessness',YN),
+  ch('Function Class','Activity limit','Daily limitation','int',[{v:0,l:'None'},{v:1,l:'Mild'},{v:2,l:'Moderate'},{v:3,l:'Severe'}],0),
+  num('BP','Blood pressure (top)','mmHg',70,250,'int','Range: 70 - 250 mmHg',''),
+  num('PR','Pulse rate','bpm',35,200,'int','Range: 35 - 200 bpm',''),
+  yn('Edema','Swollen ankles','Ankle puffiness',BIN),
+  yn('Weak Peripheral Pulse','Weak pulse','Noted by doctor',YN),
+  yn('Lung rales','Lung crackles','Heard with stethoscope',YN),
+  yn('Systolic Murmur','Systolic murmur','Heard by doctor',YN),
+  yn('Diastolic Murmur','Diastolic murmur','Heard by doctor',YN),
+  yn('Q Wave','Abnormal Q wave','ECG report',BIN),
+  yn('St Elevation','ST elevation','ECG report',BIN),
+  yn('St Depression','ST depression','ECG report',BIN),
+  yn('Tinversion','T-wave inversion','ECG report',BIN),
+  yn('LVH','Thickened wall (LVH)','ECG report',YN),
+  yn('Poor R Progression','Poor R progression','ECG report',YN),
+  ch('BBB','Bundle branch block','Conduction delay','str',[{v:'N',l:'None'},{v:'LBBB',l:'Left'},{v:'RBBB',l:'Right'}],'N'),
+  num('FBS','Fasting blood sugar','mg/dL',40,500,'int','Range: 40 - 500 mg/dL',''),
+  num('CR','Creatinine','mg/dL',0.2,10,'float','Range: 0.2 - 10.0 mg/dL',''),
+  num('TG','Triglycerides','mg/dL',20,1500,'int','Range: 20 - 1500 mg/dL',''),
+  num('LDL','LDL cholesterol','mg/dL',20,400,'int','Range: 20 - 400 mg/dL',''),
+  num('HDL','HDL cholesterol','mg/dL',10,150,'int','Range: 10 - 150 mg/dL',''),
+  num('BUN','Blood urea nitrogen','mg/dL',2,150,'int','Range: 2 - 150 mg/dL',''),
+  num('ESR','ESR','mm/h',0,140,'int','Range: 0 - 140 mm/h',''),
+  num('HB','Hemoglobin','g/dL',4,22,'float','Range: 4.0 - 22.0 g/dL',''),
+  num('K','Potassium','mEq/L',2,7.5,'float','Range: 2.0 - 7.5 mEq/L',''),
+  num('Na','Sodium','mEq/L',110,160,'int','Range: 110 - 160 mEq/L',''),
+  num('WBC','White blood cells','cells/µL',1000,50000,'int','Range: 1000 - 50000 cells/µL',''),
+  num('Lymph','Lymphocytes','%',0,100,'int','Range: 0 - 100%',''),
+  num('Neut','Neutrophils','%',0,100,'int','Range: 0 - 100%',''),
+  num('PLT','Platelets','×1000/µL',10,1000,'int','Range: 10 - 1000 ×1000/µL',''),
+  num('EF-TTE','Pumping strength (EF)','%',10,80,'int','Range: 10 - 80%',''),
+  ch('Region RWMA','Abnormal wall motion','Echo report','int',[{v:0,l:'None'},{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3'},{v:4,l:'4'}],0),
+  ch('VHD','Valve disease','Valvular disease','str',[{v:'N',l:'None'},{v:'mild',l:'Mild'},{v:'Moderate',l:'Moderate'},{v:'Severe',l:'Severe'}],'N')
+];
+var F={}; FIELDS.forEach(f => F[f.k]=f);
+
+// Exact 55 features required by app.py FEATURE_ORDER
+var ORDER=["Age","Weight","Length","Sex","BMI","DM","HTN","Current Smoker","EX-Smoker","FH","Obesity","CRF","CVA","Airway disease","Thyroid Disease","CHF","DLP","BP","PR","Edema","Weak Peripheral Pulse","Lung rales","Systolic Murmur","Diastolic Murmur","Typical Chest Pain","Dyspnea","Function Class","Atypical","Nonanginal","Exertional CP","LowTH Ang","Q Wave","St Elevation","St Depression","Tinversion","LVH","Poor R Progression","BBB","FBS","CR","TG","LDL","HDL","BUN","ESR","HB","K","Na","WBC","Lymph","Neut","PLT","EF-TTE","Region RWMA","VHD"];
+
+var STEPS=[
+  {id:'basics',title:'About You',keys:['DOB','Sex','Weight','Length']},
+  {id:'history',title:'Health History',keys:['HTN','DM','DLP','Current Smoker','EX-Smoker','FH','CHF','CRF','CVA','Airway disease','Thyroid Disease']},
+  {id:'symptoms',title:'Symptoms',keys:['Typical Chest Pain','Atypical','Nonanginal','Exertional CP','LowTH Ang','Dyspnea','Function Class']},
+  {id:'exam',title:'Vitals & Exam',keys:['BP','PR','Edema','Weak Peripheral Pulse','Lung rales','Systolic Murmur','Diastolic Murmur']},
+  {id:'ecg',title:'ECG Results',keys:['Q Wave','St Elevation','St Depression','Tinversion','LVH','Poor R Progression','BBB']},
+  {id:'labs',title:'Blood Lab Tests',keys:['FBS','CR','TG','LDL','HDL','BUN','ESR','HB','K','Na','WBC','Lymph','Neut','PLT']},
+  {id:'echo',title:'Echo Ultrasound',keys:['EF-TTE','Region RWMA','VHD']}
+];
+
+var state = freshState(), step = 0, entries = [];
+
+function freshState(){
+  var s = {};
+  FIELDS.forEach(f => {
+    if(f.kind==='yn') s[f.k]=f.no;
+    else if(f.kind==='choice'&&f.def!==undefined) s[f.k]=f.def;
+    else if(f.kind==='date') s[f.k]='';
+  });
+  return s;
+}
+
+function buildPayload(s){
+  var p = {};
+
+  // Pre-calculate derived features
+  var computedAge = calculateAge(s.DOB);
+  var w = Number(s.Weight), h = Number(s.Length);
+  var computedBMI = (w > 0 && h > 0) ? Math.round(w / Math.pow(h / 100, 2) * 100) / 100 : 25.0;
+  var computedObesity = computedBMI > 25 ? 'Y' : 'N';
+
+  ORDER.forEach(k => {
+    if(k === 'Age') {
+      p.Age = computedAge;
+    } else if(k === 'BMI') {
+      p.BMI = computedBMI;
+    } else if(k === 'Obesity') {
+      p.Obesity = computedObesity;
+    } else if(s[k] !== undefined && s[k] !== null) {
+      p[k] = s[k];
+    } else if(F[k]) {
+      if(F[k].kind === 'yn') p[k] = F[k].no;
+      else if(F[k].kind === 'choice') p[k] = F[k].def !== undefined ? F[k].def : 'N';
+      else p[k] = 0;
+    } else {
+      p[k] = 0;
+    }
+  });
+  return p;
+}
+
+/* Strict Step & Value Range Validation logic */
+function validateStepKeys(keys) {
+  var missing = [];
+  keys.forEach(k => {
+    var f = F[k];
+    var v = state[k];
+    if (f.kind === 'date') {
+      if (!v || v.trim() === '') {
+        missing.push(f.label + ' (Required)');
+      } else if (calculateAge(v) < 18 || calculateAge(v) > 110) {
+        missing.push(f.label + ' (Age must be between 18 and 110 years)');
+      }
+    } else if (f.kind === 'num') {
+      if (v === undefined || v === null || v === '' || isNaN(v)) {
+        missing.push(f.label + ' (Required)');
+      } else if (f.min !== undefined && v < f.min) {
+        missing.push(f.label + ' must be at least ' + f.min + ' ' + f.unit);
+      } else if (f.max !== undefined && v > f.max) {
+        missing.push(f.label + ' must not exceed ' + f.max + ' ' + f.unit);
+      }
+    } else if (f.kind === 'choice') {
+      if (v === undefined || v === null || v === '') {
+        missing.push(f.label + ' (Required)');
+      }
+    }
+  });
+  return missing;
+}
+
+function renderWizard(){
+  var wiz = document.getElementById('wizard');
+  var s = STEPS[step];
+  var pct = Math.round((step + 1) / STEPS.length * 100);
+
+  var h = '<div class="prog"><i style="width:'+pct+'%"></i></div>'+
+          '<div class="stepmeta"><span>Step '+(step+1)+' of '+STEPS.length+' · '+s.title+'</span></div>'+
+          '<div id="stepErr" class="err-banner" hidden></div>'+
+          '<div class="fields">'+s.keys.map(k => fieldHTML(F[k])).join('')+'</div>'+
+          '<div class="nav">'+
+          (step > 0 ? '<button class="sbtn" onclick="wizardNav(-1)">Back</button>' : '<span></span>')+
+          (step < STEPS.length - 1 ? '<button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="wizardNav(1)">Continue</button>' : '<button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="submitCheck()">Submit Assessment</button>')+
+          '</div>';
+  wiz.innerHTML = h;
+}
+
+function fieldHTML(f){
+  var v = state[f.k];
+  if(f.kind==='date'){
+    return '<div class="fld"><label>'+f.label+' <span class="req-star">*</span></label>'+
+      '<div class="inp"><input type="date" value="'+(v||'')+'" required onchange="dateInput(\''+f.k+'\', this.value)"></div></div>';
+  }
+  if(f.kind==='yn'){
+    var on = (v === f.yes);
+    return '<div class="fld"><div class="row-yn"><span>'+f.label+' <span class="req-star">*</span></span>'+
+      '<button type="button" class="sw" role="switch" aria-checked="'+on+'" onclick="toggleSwitch(\''+f.k+'\')"><span class="knob"></span><span>'+(on?'Yes':'No')+'</span></button></div></div>';
+  }
+  if(f.kind==='num'){
+    var stepAttr = f.t === 'float' ? '0.1' : '1';
+    return '<div class="fld"><label>'+f.label+' <span class="req-star">*</span></label>'+
+      '<div class="inp"><input type="number" min="'+f.min+'" max="'+f.max+'" step="'+stepAttr+'" value="'+(v===undefined?'':v)+'" required placeholder="'+f.min+' - '+f.max+'" oninput="numInput(\''+f.k+'\', this.value)"><span style="padding:0 8px;color:var(--muted)">'+f.unit+'</span></div>'+
+      '<div class="fld-hint">Allowed range: '+f.min+' – '+f.max+' '+f.unit+'</div></div>';
+  }
+  return '<div class="fld"><span>'+f.label+' <span class="req-star">*</span></span><div class="seg">'+f.opts.map(o => '<button aria-checked="'+(v===o.v)+'" onclick="chooseOpt(\''+f.k+'\', \''+o.v+'\')">'+o.l+'</button>').join('')+'</div></div>';
+}
+
+window.dateInput = function(k, val){
+  state[k] = val;
+};
+
+window.toggleSwitch = function(k){
+  var f = F[k];
+  state[k] = (state[k] === f.yes) ? f.no : f.yes;
+  renderWizard();
+};
+
+window.numInput = function(k, val){
+  state[k] = val === '' ? undefined : Number(val);
+};
+
+window.chooseOpt = function(k, val){
+  state[k] = val;
+  renderWizard();
+};
+
+window.wizardNav = function(dir){
+  if (dir > 0) {
+    var missing = validateStepKeys(STEPS[step].keys);
+    var errBanner = document.getElementById('stepErr');
+    if (missing.length > 0) {
+      if (errBanner) {
+        errBanner.textContent = 'Please fix the following validation errors: ' + missing.join('; ');
+        errBanner.hidden = false;
+      }
+      return;
+    }
+  }
+  step += dir;
+  renderWizard();
+};
+
+window.submitCheck = function(){
+  var missing = validateStepKeys(STEPS[step].keys);
+  var errBanner = document.getElementById('stepErr');
+  if (missing.length > 0) {
+    if (errBanner) {
+      errBanner.textContent = 'Please fix the following validation errors: ' + missing.join('; ');
+      errBanner.hidden = false;
+    }
+    return;
+  }
+
+  var payload = buildPayload(state);
+
+  fetch(API_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) {
+        throw new Error(data.error || data.message || ('HTTP Error ' + r.status));
+      }
+      return data;
+    });
+  })
+  .then(function(res) {
+    entries.push({ts: Date.now(), data: payload, result: res});
+    window.showView('dash');
+    renderDash();
+  })
+  .catch(function(err) {
+    console.error('Prediction API Error:', err);
+    entries.push({
+      ts: Date.now(),
+      data: payload,
+      result: { status: 'error', error: err.message || 'Failed to communicate with Flask API.' }
+    });
+    window.showView('dash');
+    renderDash();
+  });
+};
+
+function renderDash(){
+  var slotDash = document.getElementById('slot-dash');
+  if (slotDash && window.HeartViewer) {
+    window.HeartViewer.mount(slotDash);
+  }
+
+  if(!entries.length) return;
+  var last = entries[entries.length - 1];
+  var res = last.result || {};
+  var assessEl = document.getElementById('assess');
+
+  if (res.status === 'error' || res.error) {
+    assessEl.innerHTML =
+      '<h2 style="color:var(--high)">Assessment Error</h2>'+
+      '<p style="color:var(--high)">' + (res.error || 'Prediction service failed.') + '</p>'+
+      (res.missing ? '<p style="color:var(--muted)">Missing Features: ' + res.missing.join(', ') + '</p>' : '');
+  } else {
+    var label = res.label || 'Low Vessel Risk';
+    var prob = (typeof res.probability === 'number' && !isNaN(res.probability)) ? res.probability : 0.0;
+    var pct = Math.round(prob * 100);
+
+    var vesselBadges = '';
+    if (res.results) {
+      Object.keys(res.results).forEach(function(vk) {
+        var vData = res.results[vk];
+        if (vData && vData.prediction !== undefined) {
+          var isHigh = vData.prediction === 1;
+          var vProb = typeof vData.probability === 'number' ? Math.round(vData.probability * 100) + '%' : 'N/A';
+          vesselBadges += '<span class="vessel-badge ' + (isHigh ? 'high' : 'ok') + '">' + vk + ': ' + (isHigh ? 'Risk Detected' : 'Normal') + ' (' + vProb + ')</span>';
+        }
+      });
+    }
+
+    assessEl.innerHTML =
+      '<h2>' + label + '</h2>'+
+      '<p style="color:var(--muted)">Maximum Risk Probability: ' + pct + '%</p>'+
+      '<div style="margin-top:12px">' + vesselBadges + '</div>';
+  }
+
+  // History list rendering
+  var histEl = document.getElementById('history');
+  if (histEl) {
+    histEl.innerHTML = entries.slice().reverse().map(function(item, idx) {
+      var d = new Date(item.ts);
+      var r = item.result || {};
+      var lbl = r.label || (r.error ? 'Error' : 'Low Vessel Risk');
+      return '<div class="hist-row">' +
+        '<div><strong>' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + '</strong>' +
+        '<span style="display:block;color:var(--muted);font-size:0.85rem">' + lbl + '</span></div>' +
+        '<button class="sbtn" onclick="viewHistoryItem(' + (entries.length - 1 - idx) + ')">View JSON</button>' +
+        '</div>';
+    }).join('');
+  }
+
+  document.getElementById('jsonOut').textContent = JSON.stringify(last.data, null, 2);
+}
+
+window.viewHistoryItem = function(idx) {
+  if (entries[idx]) {
+    document.getElementById('jsonOut').textContent = JSON.stringify(entries[idx].data, null, 2);
+    document.getElementById('jsonOut').scrollIntoView({ behavior: 'smooth' });
+  }
+};
+
+/* INIT */
+window.checkSession();
+
+})();
+</script>
+</body>
+</html>
