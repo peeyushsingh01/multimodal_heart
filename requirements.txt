@@ -1,12 +1,12 @@
 Flask
 Flask-SQLAlchemy
+Flask-Limiter
 psycopg2-binary
 gunicorn
 pandas
 numpy
-scikit-learn
+scikit-learn==1.7.2
 joblib
 Authlib
 requests
 werkzeug
-flask-limiter

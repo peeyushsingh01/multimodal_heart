@@ -67,9 +67,12 @@ limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
 # ==========================================
 db_url = os.environ["DATABASE_URL"]  # no fallback: never hardcode credentials
 
-# Legacy URI prefix fix (postgres:// -> postgresql://)
+# Force the psycopg2 driver: SQLAlchemy 2.1 defaults plain postgresql:// to psycopg v3,
+# which isn't installed (we use psycopg2-binary). Also fixes legacy postgres:// URLs.
 if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
+    db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
