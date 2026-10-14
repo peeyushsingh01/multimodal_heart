@@ -5,6 +5,7 @@ import numpy as np
 import pyvista as pv
 import streamlit as st
 import streamlit.components.v1 as components
+import trimesh
 
 # Enable off-screen rendering
 pv.OFF_SCREEN = True
@@ -59,42 +60,54 @@ c_yellow = st.sidebar.color_picker("Zone 3 - Moderate Risk (Yellow)", "#FFFF00")
 c_green = st.sidebar.color_picker("Zone 4 - Low Risk (Green)", "#00FF00")
 c_blue = st.sidebar.color_picker("Zone 5 - Minimal Risk (Blue)", "#007FFF")
 
-folder_name = "heart_folder"
+folder_name = "heart_folder2"
 
 
-# Step 1: Load Sub-meshes, Categorize Risk Zones & Bound Limits
+# Step 1: Load .glb Sub-meshes using Trimesh, Categorize Risk Zones & Bound Limits
 @st.cache_resource
 def load_and_classify_risk_zones(folder):
     if not os.path.exists(folder):
         return (
             None,
-            f"Folder '{folder}' not found. Ensure 'heart_folder' is in the same directory.",
+            f"Folder '{folder}' not found. Ensure 'heart_folder2' is in the same directory.",
             0.0,
             1.0,
             0.0,
             1.0,
         )
 
-    obj_files = glob.glob(os.path.join(folder, "*.obj"))
-    if not obj_files:
-        return None, f"No .obj files found inside '{folder}'.", 0.0, 1.0, 0.0, 1.0
+    glb_files = glob.glob(os.path.join(folder, "*.glb"))
+    if not glb_files:
+        return None, f"No .glb files found inside '{folder}'.", 0.0, 1.0, 0.0, 1.0
 
     submeshes = []
     z_centroids = []
 
-    for filepath in sorted(obj_files):
+    for filepath in sorted(glb_files):
         try:
-            m = pv.read(filepath)
-            poly = m if isinstance(m, pv.PolyData) else m.extract_surface()
+            scene_or_mesh = trimesh.load(filepath)
+            
+            # Handle both single meshes and multi-mesh scenes
+            if isinstance(scene_or_mesh, trimesh.Scene):
+                mesh_list = [m for m in scene_or_mesh.geometry.values()]
+                if not mesh_list:
+                    continue
+                t_mesh = trimesh.util.concatenate(mesh_list)
+            else:
+                t_mesh = scene_or_mesh
+
+            # Convert Trimesh to PyVista PolyData
+            faces = np.hstack([[3, *face] for face in t_mesh.faces])
+            poly = pv.PolyData(t_mesh.vertices, faces)
+
             if poly.n_points > 0:
                 submeshes.append(poly)
-                # Z-axis corresponds to vertical orientation (Apex to Base)
                 z_centroids.append(poly.center[2])
         except Exception:
             continue
 
     if not submeshes:
-        return None, "Failed to parse any valid .obj files.", 0.0, 1.0, 0.0, 1.0
+        return None, "Failed to parse any valid .glb files.", 0.0, 1.0, 0.0, 1.0
 
     z_min, z_max = min(z_centroids), max(z_centroids)
     z_range = z_max - z_min + 1e-6
@@ -119,7 +132,6 @@ def load_and_classify_risk_zones(folder):
         mesh.field_data["risk_zone"] = [zone_id]
         classified_blocks.append(mesh, name=f"mesh_{idx}_zone_{zone_id}")
 
-    # Compute global bounding box bounds: [xmin, xmax, ymin, ymax, zmin, zmax]
     combined = submeshes[0].merge(submeshes[1:])
     bounds = combined.bounds
 
@@ -146,13 +158,12 @@ if error_msg or blocks is None:
     st.error(error_msg)
     st.stop()
 
-st.sidebar.success(f"Categorized {len(blocks)} sub-meshes into 5 Risk Zones!")
+st.sidebar.success(f"Categorized {len(blocks)} GLB sub-meshes into 5 Risk Zones!")
 
-# Step 2: Corrected Multi-Axis Bi-Directional Clipping & Rendering
+# Step 2: Multi-Axis Bi-Directional Clipping & Rendering
 plotter = pv.Plotter(window_size=[900, 600], off_screen=True)
 plotter.set_background("#0e1117")
 
-# Enable Order-Independent Transparency for clean internal visualization
 if mesh_opacity < 1.0:
     plotter.enable_depth_peeling(number_of_peels=4, occlusion_ratio=0.0)
 
@@ -167,6 +178,7 @@ color_map = {
 y_range = y_max_global - y_min_global
 z_range = z_max_global - z_min_global
 
+added_count = 0
 for name in blocks.keys():
     mesh = blocks[name]
     zone_id = mesh.field_data["risk_zone"][0]
@@ -174,28 +186,23 @@ for name in blocks.keys():
 
     if cut_axis == "Front / Back (Y-Axis)":
         if cut_val > 0:
-            # Cut Front to Back along Y-axis
             cut_y = y_max_global - ((cut_val / 100.0) * y_range)
             clipped_mesh = mesh.clip(normal=(0, 1, 0), origin=(0, cut_y, 0))
         elif cut_val < 0:
-            # Cut Back to Front along Y-axis
             cut_y = y_min_global + ((abs(cut_val) / 100.0) * y_range)
             clipped_mesh = mesh.clip(normal=(0, -1, 0), origin=(0, cut_y, 0))
         else:
             clipped_mesh = mesh
-    else:  # Top / Bottom (Z-Axis)
+    else:
         if cut_val > 0:
-            # Cut Top to Bottom along Z-axis
             cut_z = z_max_global - ((cut_val / 100.0) * z_range)
             clipped_mesh = mesh.clip(normal=(0, 0, 1), origin=(0, 0, cut_z))
         elif cut_val < 0:
-            # Cut Bottom to Top along Z-axis
             cut_z = z_min_global + ((abs(cut_val) / 100.0) * z_range)
             clipped_mesh = mesh.clip(normal=(0, 0, -1), origin=(0, 0, cut_z))
         else:
             clipped_mesh = mesh
 
-    # Render remaining clipped sub-mesh if non-empty
     if clipped_mesh.n_points > 0:
         plotter.add_mesh(
             clipped_mesh,
@@ -206,70 +213,69 @@ for name in blocks.keys():
             specular_power=20,
             show_edges=False,
         )
+        added_count += 1
 
 plotter.reset_camera()
 plotter.camera.zoom(1.2)
 
-# Export base VTK WebGL HTML
-with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tf:
+if added_count == 0:
+    st.error("Clipping cut position is too extreme—no geometry left to display! Adjust the slider.")
+    st.stop()
+
+# Export base VTK WebGL HTML safely
+with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as tf:
     plotter.export_html(tf.name)
-    with open(tf.name, "r", encoding="utf-8") as f:
-        html_content = f.read()
+    tf_path = tf.name
 
+with open(tf_path, "r", encoding="utf-8") as f:
+    html_content = f.read()
 
-# Step 3: Inject Dual-Phase Pulsation Script
+# Step 3: Inject Dual-Phase Pulsation Script with Canvas Safety Checks
 js_chamber_animation = f"""
 <script>
-(function checkVTK() {{
-    const canvas = document.querySelector('canvas');
-    if (!canvas) {{
-        setTimeout(checkVTK, 100);
-        return;
-    }}
+window.addEventListener('load', function() {{
+    setTimeout(function checkVTK() {{
+        const canvas = document.querySelector('canvas');
+        if (!canvas) {{
+            setTimeout(checkVTK, 200);
+            return;
+        }}
 
-    const bpm = {bpm};
-    const atriaAmp = {atrial_amp};
-    const ventAmp = {vent_amp};
-    const freq = (bpm / 60.0) * 2.0 * Math.PI;
-    const startTime = performance.now();
+        const bpm = {bpm};
+        const atriaAmp = {atrial_amp};
+        const ventAmp = {vent_amp};
+        const freq = (bpm / 60.0) * 2.0 * Math.PI;
+        const startTime = performance.now();
 
-    function animate() {{
-        const t = (performance.now() - startTime) / 1000.0;
-        const cyclePhase = (freq * t) % (2.0 * Math.PI);
+        function animate() {{
+            const t = (performance.now() - startTime) / 1000.0;
+            const cyclePhase = (freq * t) % (2.0 * Math.PI);
 
-        // Atrial Phase
-        const atrialPulse = Math.sin(cyclePhase) > 0 ? Math.sin(cyclePhase) : 0;
+            const atrialPulse = Math.sin(cyclePhase) > 0 ? Math.sin(cyclePhase) : 0;
+            const ventPhase = cyclePhase - 0.8;
+            const ventPulse = Math.sin(ventPhase) > 0 ? Math.pow(Math.sin(ventPhase), 2) : 0;
 
-        // Ventricular Phase (0.8 rad AV delay)
-        const ventPhase = cyclePhase - 0.8;
-        const ventPulse = Math.sin(ventPhase) > 0 ? Math.pow(Math.sin(ventPhase), 2) : 0;
+            const scaleAtriaX = 1.0 - (atriaAmp * atrialPulse);
+            const scaleVentY = 1.0 - (ventAmp * 0.3 * ventPulse);
+            const scaleZ = 1.0 - (atriaAmp * 0.3 * atrialPulse + ventAmp * 0.5 * ventPulse);
 
-        // Non-uniform spatial scaling factors
-        const scaleAtriaX = 1.0 - (atriaAmp * atrialPulse);
-        const scaleAtriaY = 1.0 - (atriaAmp * 0.5 * atrialPulse);
-        
-        const scaleVentX  = 1.0 - (ventAmp * ventPulse);
-        const scaleVentY  = 1.0 - (ventAmp * 0.3 * ventPulse);
+            canvas.style.transform = `matrix3d(
+                ${{scaleAtriaX}}, 0, 0, 0,
+                0, ${{scaleVentY}}, 0, 0,
+                0, 0, ${{scaleZ}}, 0,
+                0, 0, 0, 1
+            )`;
+            canvas.style.transformOrigin = 'center center';
 
-        const scaleZ = 1.0 - (atriaAmp * 0.3 * atrialPulse + ventAmp * 0.5 * ventPulse);
-
-        // WebGL Matrix transformation
-        canvas.style.transform = `matrix3d(
-            ${{scaleAtriaX}}, 0, 0, 0,
-            0, ${{scaleVentY}}, 0, 0,
-            0, 0, ${{scaleZ}}, 0,
-            0, 0, 0, 1
-        )`;
-        canvas.style.transformOrigin = 'center center';
-
-        requestAnimationFrame(animate);
-    }}
-    animate();
-}})();
+            requestAnimationFrame(animate);
+        }}
+        animate();
+    }}, 500);
+}});
 </script>
 """
 
-components.html(html_content + js_chamber_animation, height=600, scrolling=False)
+components.html(html_content + js_chamber_animation, height=620, scrolling=False)
 
 # Open cmd
 # cd "C:\Users\aakar\OneDrive\Desktop\VS Code Python\Multimodal
