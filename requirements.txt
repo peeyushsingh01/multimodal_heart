@@ -9,3 +9,4 @@ joblib
 Authlib
 requests
 werkzeug
+flask-limiter
