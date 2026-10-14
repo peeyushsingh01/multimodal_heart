@@ -19,3 +19,4 @@ trame-rca
 vtk
 requests
 cryptography
+ipython
