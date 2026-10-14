@@ -1,0 +1,11 @@
+Flask
+Flask-SQLAlchemy
+psycopg2-binary
+gunicorn
+pandas
+numpy
+scikit-learn
+joblib
+Authlib
+requests
+werkzeug
