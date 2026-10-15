@@ -29,7 +29,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 [hidden]{display:none!important}
 
-.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
+.top{display:flex;align-items:center;justify-space-between;gap:12px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font-family:'Literata',Georgia,serif;font-weight:700;font-size:1.25rem;color:var(--accent)}
 main{max-width:1200px;margin:0 auto;padding:32px 20px 72px}
 
@@ -408,8 +408,8 @@ th,td{text-align:left;padding:10px 8px;border-top:1px solid var(--line)}
             <div class="ctrl-row">
               <label>Clipping Plane Axis</label>
               <div class="seg" style="display:flex;gap:4px">
-                <button id="btn-axis-y" aria-checked="true" onclick="setAxis('y')">Front/Back (Y)</button>
-                <button id="btn-axis-z" aria-checked="false" onclick="setAxis('z')">Top/Bottom (Z)</button>
+                <button type="button" id="btn-axis-y" aria-checked="true" onclick="setAxis('y')">Front/Back (Y)</button>
+                <button type="button" id="btn-axis-z" aria-checked="false" onclick="setAxis('z')">Top/Bottom (Z)</button>
               </div>
             </div>
             <div class="ctrl-row">
@@ -784,7 +784,7 @@ var FIELDS=[
   num('PLT','Platelets','×1000/µL',10,1000,'int','Range: 10 - 1000 ×1000/µL',''),
   num('EF-TTE','Pumping strength (EF)','%',10,80,'int','Range: 10 - 80%',''),
   ch('Region RWMA','Abnormal wall motion','Echo report','int',[{v:0,l:'None'},{v:1,l:'1'},{v:2,l:'2'},{v:3,l:'3'},{v:4,l:'4'}],0),
-  ch('VHD','Valve disease','Valvular disease','str',[{v:'N',l:'None'},{v:'mild',l:'Mild'},{v:'Moderate',l:'Moderate'},{v:'Severe',l:'Severe'}],'N')
+  ch('VHD','Valve disease','Valvular disease','str',[{v:'N',l:'None'},{v:'Mild',l:'Mild'},{v:'Moderate',l:'Moderate'},{v:'Severe',l:'Severe'}],'N')
 ];
 var F={}; FIELDS.forEach(f => F[f.k]=f);
 
@@ -862,8 +862,8 @@ function renderWizard(){
           '<div id="stepErr" class="err-banner" hidden></div>'+
           '<div class="fields">'+s.keys.map(k => fieldHTML(F[k])).join('')+'</div>'+
           '<div class="nav">'+
-          (step > 0 ? '<button class="sbtn" onclick="wizardNav(-1)">Back</button>' : '<span></span>')+
-          (step < STEPS.length - 1 ? '<button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="wizardNav(1)">Continue</button>' : '<button class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="submitCheck()">Submit Assessment</button>')+
+          (step > 0 ? '<button type="button" class="sbtn" onclick="wizardNav(-1)">Back</button>' : '<span></span>')+
+          (step < STEPS.length - 1 ? '<button type="button" class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="wizardNav(1)">Continue</button>' : '<button type="button" class="sbtn" style="background:var(--accent);color:var(--accent-ink);border:none" onclick="submitCheck()">Submit Assessment</button>')+
           '</div>';
   wiz.innerHTML = h;
 }
@@ -885,13 +885,19 @@ function fieldHTML(f){
       '<div class="inp"><input type="number" min="'+f.min+'" max="'+f.max+'" step="'+stepAttr+'" value="'+(v===undefined?'':v)+'" required placeholder="'+f.min+' - '+f.max+'" oninput="numInput(\''+f.k+'\', this.value)"><span style="padding:0 8px;color:var(--muted)">'+f.unit+'</span></div>'+
       '<div class="fld-hint">Allowed range: '+f.min+' – '+f.max+' '+f.unit+'</div></div>';
   }
-  return '<div class="fld"><span>'+f.label+' <span class="req-star">*</span></span><div class="seg">'+f.opts.map(o => '<button aria-checked="'+(v===o.v)+'" onclick="chooseOpt(\''+f.k+'\', \''+o.v+'\')">'+o.l+'</button>').join('')+'</div></div>';
+  return '<div class="fld"><span>'+f.label+' <span class="req-star">*</span></span><div class="seg">'+f.opts.map(o => '<button type="button" aria-checked="'+(v == o.v)+'" onclick="chooseOpt(\''+f.k+'\', \''+o.v+'\')">'+o.l+'</button>').join('')+'</div></div>';
 }
 
 window.dateInput = function(k, val){ state[k] = val; };
 window.toggleSwitch = function(k){ var f = F[k]; state[k] = (state[k] === f.yes) ? f.no : f.yes; renderWizard(); };
 window.numInput = function(k, val){ state[k] = val === '' ? undefined : Number(val); };
-window.chooseOpt = function(k, val){ state[k] = val; renderWizard(); };
+window.chooseOpt = function(k, val){ 
+  if (F[k] && F[k].t === 'int') {
+    val = Number(val);
+  }
+  state[k] = val; 
+  renderWizard(); 
+};
 
 window.wizardNav = function(dir){
   if (dir > 0) {
@@ -1055,7 +1061,7 @@ function renderDash(){
         return '<div class="hist-row" style="' + (isSelected ? 'border-color:var(--accent);background:color-mix(in srgb,var(--accent) 5%,var(--surface))' : '') + '" onclick="viewHistoryItem(' + realIndex + ')">' +
           '<div><strong>' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + '</strong>' +
           '<span style="display:block;color:var(--muted);font-size:0.85rem">' + lbl + '</span></div>' +
-          '<button class="sbtn">' + (isSelected ? 'Selected' : 'Load Details') + '</button>' +
+          '<button type="button" class="sbtn">' + (isSelected ? 'Selected' : 'Load Details') + '</button>' +
           '</div>';
       }).join('');
     }
@@ -1301,7 +1307,7 @@ function renderPhysioBreakdown(activeRecord) {
       <div class="physio-list">
         <div class="physio-item"><span class="key">Pumping Strength (EF):</span><span class="val">${d['EF-TTE'] || '--'} %</span></div>
         <div class="physio-item"><span class="key">Wall Motion (RWMA):</span><span class="val">Class ${d['Region RWMA'] || '0'}</span></div>
-        <div class="physio-item"><span class="key">Valvular Disease:</span><span class="val">${d.VHD || 'None'}</span></div>
+        <div class="physio-item"><span class="key">Valvular Disease:</span><span class="val">${(!d.VHD || d.VHD === 'N') ? 'None' : d.VHD}</span></div>
       </div>
     </div>
   `;
