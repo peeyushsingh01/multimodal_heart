@@ -232,14 +232,14 @@ def index():
 @app.route("/render-heart-html")
 def render_heart_html():
     try:
-        folder_name = os.path.join(BASE_DIR, "heart_folder")
+        folder_name = os.path.join(BASE_DIR, "heart_folder2")
         if not os.path.exists(folder_name):
             return f"<div style='color:white;padding:20px;'>Folder '{folder_name}' not found.</div>", 404
 
         # Case-insensitive OBJ file search
         obj_files = glob.glob(os.path.join(folder_name, "*.obj")) + glob.glob(os.path.join(folder_name, "*.OBJ"))
         if not obj_files:
-            return "<div style='color:white;padding:20px;'>No .obj or .OBJ files found inside 'heart_folder'.</div>", 404
+            return "<div style='color:white;padding:20px;'>No .obj or .OBJ files found inside 'heart_folder2'.</div>", 404
 
         bpm = float(request.args.get("bpm", 70))
         atrial_amp = float(request.args.get("atrial_amp", 0.10))
