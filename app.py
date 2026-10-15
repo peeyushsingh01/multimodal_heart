@@ -596,6 +596,6 @@ def predict():
     if len(evaluations) == 1:
         return jsonify(evaluations[0])
     return jsonify({"status": "success", "batch_count": len(evaluations), "evaluations": evaluations})
-
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=DEBUG)
+    # Hugging Face runs web apps on port 7860
+    app.run(host="0.0.0.0", port=7860)
