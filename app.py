@@ -225,6 +225,27 @@ def process_single_patient_prediction(patient_data_dict: Dict[str, Any]) -> Dict
         "results": formatted_results,
     }
 
+def extract_polydata_list(mesh_or_block) -> List[pv.PolyData]:
+    """
+    Recursively extract all valid PolyData surfaces from a PyVista dataset or MultiBlock container.
+    """
+    res = []
+    if isinstance(mesh_or_block, pv.MultiBlock):
+        for block in mesh_or_block:
+            if block is not None:
+                res.extend(extract_polydata_list(block))
+    elif isinstance(mesh_or_block, pv.PolyData):
+        if mesh_or_block.n_points > 0:
+            res.append(mesh_or_block)
+    elif hasattr(mesh_or_block, "extract_surface"):
+        try:
+            surf = mesh_or_block.extract_surface()
+            if surf.n_points > 0:
+                res.append(surf)
+        except Exception:
+            pass
+    return res
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -236,10 +257,15 @@ def render_heart_html():
         if not os.path.exists(folder_name):
             return f"<div style='color:white;padding:20px;'>Folder '{folder_name}' not found.</div>", 404
 
-        # Case-insensitive OBJ file search
-        obj_files = glob.glob(os.path.join(folder_name, "*.obj")) + glob.glob(os.path.join(folder_name, "*.OBJ"))
-        if not obj_files:
-            return "<div style='color:white;padding:20px;'>No .obj or .OBJ files found inside 'heart_folder2'.</div>", 404
+        # Search for GLB, GLTF, and OBJ files (case-insensitive extensions)
+        patterns = ["*.glb", "*.GLB", "*.gltf", "*.GLTF", "*.obj", "*.OBJ"]
+        model_files = []
+        for pattern in patterns:
+            model_files.extend(glob.glob(os.path.join(folder_name, pattern)))
+        model_files = sorted(list(set(model_files)))
+
+        if not model_files:
+            return "<div style='color:white;padding:20px;'>No 3D model files (.glb, .gltf, .obj) found inside 'heart_folder2'.</div>", 404
 
         bpm = float(request.args.get("bpm", 70))
         atrial_amp = float(request.args.get("atrial_amp", 0.10))
@@ -258,18 +284,12 @@ def render_heart_html():
 
         submeshes = []
         z_centroids = []
-        for filepath in sorted(list(set(obj_files))):
+
+        for filepath in model_files:
             try:
                 m = pv.read(filepath)
-                # Ensure MultiBlock datasets are correctly converted to PolyData
-                if isinstance(m, pv.MultiBlock):
-                    poly = m.combine().extract_surface()
-                elif isinstance(m, pv.PolyData):
-                    poly = m
-                else:
-                    poly = m.extract_surface()
-
-                if poly.n_points > 0:
+                extracted_surfaces = extract_polydata_list(m)
+                for poly in extracted_surfaces:
                     submeshes.append(poly)
                     z_centroids.append(poly.center[2])
             except Exception as read_ex:
@@ -277,7 +297,7 @@ def render_heart_html():
                 continue
 
         if not submeshes:
-            return "<div style='color:white;padding:20px;'>Failed to parse any valid 3D geometry from OBJ files.</div>", 500
+            return "<div style='color:white;padding:20px;'>Failed to parse any valid 3D geometry from model files.</div>", 500
 
         z_min, z_max = min(z_centroids), max(z_centroids)
         z_range = z_max - z_min + 1e-6
@@ -369,213 +389,3 @@ def render_heart_html():
 
                 const atrialPulse = Math.sin(cyclePhase) > 0 ? Math.sin(cyclePhase) : 0;
                 const ventPhase = cyclePhase - 0.8;
-                const ventPulse = Math.sin(ventPhase) > 0 ? Math.pow(Math.sin(ventPhase), 2) : 0;
-
-                const scaleAtriaX = 1.0 - (atriaAmp * atrialPulse);
-                const scaleAtriaY = 1.0 - (atriaAmp * 0.5 * atrialPulse);
-                const scaleVentX  = 1.0 - (ventAmp * ventPulse);
-                const scaleVentY  = 1.0 - (ventAmp * 0.3 * ventPulse);
-                const scaleZ = 1.0 - (atriaAmp * 0.3 * atrialPulse + ventAmp * 0.5 * ventPulse);
-
-                canvas.style.transform = `matrix3d(
-                    ${{scaleAtriaX}}, 0, 0, 0,
-                    0, ${{scaleVentY}}, 0, 0,
-                    0, 0, ${{scaleZ}}, 0,
-                    0, 0, 0, 1
-                )`;
-                canvas.style.transformOrigin = 'center center';
-
-                requestAnimationFrame(animate);
-            }}
-            animate();
-        }})();
-        </script>
-        """
-
-        return html_content + js_chamber_animation
-
-    except Exception as e:
-        log.exception("Error rendering 3D heart model")
-        return f"<div style='color:#EF7480;padding:20px;font-family:sans-serif;'><h3>Failed to render 3D Heart Model</h3><p>{str(e)}</p></div>", 500
-
-@app.route("/login/google")
-def google_login():
-    if google is None:
-        return jsonify({"error": "Google login is not configured on this server."}), 503
-    redirect_uri = url_for("google_callback", _external=True)
-    return google.authorize_redirect(redirect_uri)
-
-@app.route("/login/google/callback")
-def google_callback():
-    if google is None:
-        return jsonify({"error": "Google login is not configured on this server."}), 503
-    try:
-        token = google.authorize_access_token()
-        user_info = token.get("userinfo") or {}
-        if not user_info.get("email") or not user_info.get("email_verified"):
-            return redirect("/?error=email_unverified")
-
-        email = user_info["email"].lower()
-        user = User.query.filter_by(email=email).first()
-        if user and user.provider != "google":
-            return redirect("/?error=account_exists_use_password")
-        if not user:
-            user = User(email=email, provider="google")
-            db.session.add(user)
-            db.session.commit()
-
-        session.clear()
-        session["user_email"] = user.email
-        return redirect("/")
-    except Exception:
-        db.session.rollback()
-        log.exception("Google OAuth callback failed")
-        return redirect("/?error=oauth_failed")
-
-@app.route("/api/me", methods=["GET"])
-def check_me():
-    user = get_current_user()
-    if user:
-        return jsonify({"logged_in": True, "email": user.email})
-    return jsonify({"logged_in": False})
-
-@app.route("/login", methods=["POST"])
-@limiter.limit("10 per minute")
-def login():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-
-    user = User.query.filter_by(email=email).first()
-    if user and user.password_hash and check_password_hash(user.password_hash, password):
-        session.clear()
-        session["user_email"] = user.email
-        return jsonify({"status": "success", "email": user.email})
-    return jsonify({"status": "error", "message": "Invalid email or password."}), 401
-
-@app.route("/signup", methods=["POST"])
-@limiter.limit("5 per minute")
-def signup():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-
-    if not email or "@" not in email or len(email) > 120:
-        return jsonify({"status": "error", "message": "Valid email required."}), 400
-    if len(password) < 8:
-        return jsonify({"status": "error", "message": "Password must be at least 8 characters long."}), 400
-
-    if User.query.filter_by(email=email).first():
-        return jsonify({"status": "error", "message": "An account with this email already exists."}), 400
-
-    user = User(email=email, password_hash=generate_password_hash(password), provider="local")
-    db.session.add(user)
-    try:
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({"status": "error", "message": "An account with this email already exists."}), 400
-
-    session.clear()
-    session["user_email"] = user.email
-    return jsonify({"status": "success", "email": user.email})
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return jsonify({"status": "success"})
-
-@app.route("/api/history", methods=["GET"])
-def get_history():
-    user = get_current_user()
-    if not user:
-        return jsonify([])
-
-    records = Assessment.query.filter_by(user_id=user.id).order_by(Assessment.timestamp.desc()).all()
-    history = [
-        {
-            "id": r.id,
-            "ts": int(r.timestamp.timestamp() * 1000),
-            "data": r.input_data,
-            "result": r.result_data,
-        }
-        for r in records
-    ]
-    return jsonify(history)
-
-@app.route("/api/history/<int:record_id>", methods=["DELETE"])
-def delete_history(record_id: int):
-    user = get_current_user()
-    if not user:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    record = Assessment.query.filter_by(id=record_id, user_id=user.id).first()
-    if record:
-        db.session.delete(record)
-        db.session.commit()
-        return jsonify({"status": "success"})
-    return jsonify({"error": "Record not found"}), 404
-
-@app.route("/predict", methods=["POST"])
-@limiter.limit("30 per minute")
-def predict():
-    denied = login_required_check()
-    if denied:
-        return denied
-
-    payload = request.get_json(silent=True)
-    if not payload:
-        return jsonify({"error": "Invalid JSON or empty payload."}), 400
-
-    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        rows = payload["data"]
-    elif isinstance(payload, dict):
-        rows = [payload]
-    elif isinstance(payload, list):
-        rows = payload
-    else:
-        return jsonify({"error": "Unsupported request format."}), 400
-
-    if not rows or len(rows) > MAX_BATCH or not all(isinstance(r, dict) for r in rows):
-        return jsonify({"error": f"Provide 1-{MAX_BATCH} JSON objects."}), 400
-
-    if not PREDICT_MODULE_LOADED or predict_patient is None:
-        return jsonify({"status": "error", "error": "Inference engine unavailable."}), 503
-
-    input_df, problem = build_input_frame(rows)
-    if problem:
-        return jsonify({"status": "error", **problem}), 422
-
-    user = get_current_user()
-    evaluations = []
-
-    try:
-        for idx in range(len(input_df)):
-            patient_data_dict = input_df.iloc[idx].to_dict()
-            response_payload = clean_json(process_single_patient_prediction(patient_data_dict))
-
-            if user:
-                db.session.add(Assessment(
-                    user_id=user.id,
-                    input_data=clean_json(patient_data_dict),
-                    result_data=response_payload,
-                ))
-            evaluations.append(response_payload)
-
-        if user:
-            db.session.commit()
-
-    except Exception:
-        db.session.rollback()
-        log.exception("Error executing inference engine or writing to database.")
-        return jsonify({
-            "status": "error",
-            "error": "Prediction failed. Please check your input and try again.",
-        }), 500
-
-    if len(evaluations) == 1:
-        return jsonify(evaluations[0])
-    return jsonify({"status": "success", "batch_count": len(evaluations), "evaluations": evaluations})
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=DEBUG)
