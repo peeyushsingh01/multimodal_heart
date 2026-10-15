@@ -340,7 +340,7 @@ def render_heart_html():
                     clipped_mesh = mesh.clip(normal=(0, 0, 1), origin=(0, 0, cut_z))
                 elif cut_val < 0:
                     cut_z = z_min_g + ((abs(cut_val) / 100.0) * z_range)
-                    clipped_mesh = mesh.clip(normal=(0, 0, -1), origin=(0, 0, cut_z))
+                    clipped_mesh = mesh.clip(normal=(0, 0, -1), origin=(0, 0, -cut_z))
                 else:
                     clipped_mesh = mesh
 
@@ -368,24 +368,234 @@ def render_heart_html():
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-        js_chamber_animation = f"""
+        js_chamber_animation = """
         <script>
-        (function checkVTK() {{
+        (function checkVTK() {
             const canvas = document.querySelector('canvas');
-            if (!canvas) {{
+            if (!canvas) {
                 setTimeout(checkVTK, 100);
                 return;
-            }}
+            }
 
-            const bpm = {bpm};
-            const atriaAmp = {atrial_amp};
-            const ventAmp = {vent_amp};
+            const bpm = %f;
+            const atriaAmp = %f;
+            const ventAmp = %f;
             const freq = (bpm / 60.0) * 2.0 * Math.PI;
             const startTime = performance.now();
 
-            function animate() {{
+            function animate() {
                 const t = (performance.now() - startTime) / 1000.0;
-                const cyclePhase = (freq * t) % (2.0 * Math.PI);
+                const cyclePhase = (freq * t) %% (2.0 * Math.PI);
 
                 const atrialPulse = Math.sin(cyclePhase) > 0 ? Math.sin(cyclePhase) : 0;
                 const ventPhase = cyclePhase - 0.8;
+                const ventPulse = Math.sin(ventPhase) > 0 ? Math.pow(Math.sin(ventPhase), 2) : 0;
+
+                const scaleAtriaX = 1.0 - (atriaAmp * atrialPulse);
+                const scaleAtriaY = 1.0 - (atriaAmp * 0.5 * atrialPulse);
+                const scaleVentX  = 1.0 - (ventAmp * ventPulse);
+                const scaleVentY  = 1.0 - (ventAmp * 0.3 * ventPulse);
+                const scaleZ = 1.0 - (atriaAmp * 0.3 * atrialPulse + ventAmp * 0.5 * ventPulse);
+
+                canvas.style.transform = `matrix3d(
+                    ${scaleAtriaX}, 0, 0, 0,
+                    0, ${scaleVentY}, 0, 0,
+                    0, 0, ${scaleZ}, 0,
+                    0, 0, 0, 1
+                )`;
+                canvas.style.transformOrigin = 'center center';
+
+                requestAnimationFrame(animate);
+            }
+            animate();
+        })();
+        </script>
+        """ % (bpm, atrial_amp, vent_amp)
+
+        return html_content + js_chamber_animation
+
+    except Exception as e:
+        log.exception("Error rendering 3D heart model")
+        return f"<div style='color:#EF7480;padding:20px;font-family:sans-serif;'><h3>Failed to render 3D Heart Model</h3><p>{str(e)}</p></div>", 500
+
+@app.route("/login/google")
+def google_login():
+    if google is None:
+        return jsonify({"error": "Google login is not configured on this server."}), 503
+    redirect_uri = url_for("google_callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+@app.route("/login/google/callback")
+def google_callback():
+    if google is None:
+        return jsonify({"error": "Google login is not configured on this server."}), 503
+    try:
+        token = google.authorize_access_token()
+        user_info = token.get("userinfo") or {}
+        if not user_info.get("email") or not user_info.get("email_verified"):
+            return redirect("/?error=email_unverified")
+
+        email = user_info["email"].lower()
+        user = User.query.filter_by(email=email).first()
+        if user and user.provider != "google":
+            return redirect("/?error=account_exists_use_password")
+        if not user:
+            user = User(email=email, provider="google")
+            db.session.add(user)
+            db.session.commit()
+
+        session.clear()
+        session["user_email"] = user.email
+        return redirect("/")
+    except Exception:
+        db.session.rollback()
+        log.exception("Google OAuth callback failed")
+        return redirect("/?error=oauth_failed")
+
+@app.route("/api/me", methods=["GET"])
+def check_me():
+    user = get_current_user()
+    if user:
+        return jsonify({"logged_in": True, "email": user.email})
+    return jsonify({"logged_in": False})
+
+@app.route("/login", methods=["POST"])
+@limiter.limit("10 per minute")
+def login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    user = User.query.filter_by(email=email).first()
+    if user and user.password_hash and check_password_hash(user.password_hash, password):
+        session.clear()
+        session["user_email"] = user.email
+        return jsonify({"status": "success", "email": user.email})
+    return jsonify({"status": "error", "message": "Invalid email or password."}), 401
+
+@app.route("/signup", methods=["POST"])
+@limiter.limit("5 per minute")
+def signup():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or "@" not in email or len(email) > 120:
+        return jsonify({"status": "error", "message": "Valid email required."}), 400
+    if len(password) < 8:
+        return jsonify({"status": "error", "message": "Password must be at least 8 characters long."}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"status": "error", "message": "An account with this email already exists."}), 400
+
+    user = User(email=email, password_hash=generate_password_hash(password), provider="local")
+    db.session.add(user)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": "An account with this email already exists."}), 400
+
+    session.clear()
+    session["user_email"] = user.email
+    return jsonify({"status": "success", "email": user.email})
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"status": "success"})
+
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    user = get_current_user()
+    if not user:
+        return jsonify([])
+
+    records = Assessment.query.filter_by(user_id=user.id).order_by(Assessment.timestamp.desc()).all()
+    history = [
+        {
+            "id": r.id,
+            "ts": int(r.timestamp.timestamp() * 1000),
+            "data": r.input_data,
+            "result": r.result_data,
+        }
+        for r in records
+    ]
+    return jsonify(history)
+
+@app.route("/api/history/<int:record_id>", methods=["DELETE"])
+def delete_history(record_id: int):
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    record = Assessment.query.filter_by(id=record_id, user_id=user.id).first()
+    if record:
+        db.session.delete(record)
+        db.session.commit()
+        return jsonify({"status": "success"})
+    return jsonify({"error": "Record not found"}), 404
+
+@app.route("/predict", methods=["POST"])
+@limiter.limit("30 per minute")
+def predict():
+    denied = login_required_check()
+    if denied:
+        return denied
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return jsonify({"error": "Invalid JSON or empty payload."}), 400
+
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        rows = payload["data"]
+    elif isinstance(payload, dict):
+        rows = [payload]
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        return jsonify({"error": "Unsupported request format."}), 400
+
+    if not rows or len(rows) > MAX_BATCH or not all(isinstance(r, dict) for r in rows):
+        return jsonify({"error": f"Provide 1-{MAX_BATCH} JSON objects."}), 400
+
+    if not PREDICT_MODULE_LOADED or predict_patient is None:
+        return jsonify({"status": "error", "error": "Inference engine unavailable."}), 503
+
+    input_df, problem = build_input_frame(rows)
+    if problem:
+        return jsonify({"status": "error", **problem}), 422
+
+    user = get_current_user()
+    evaluations = []
+
+    try:
+        for idx in range(len(input_df)):
+            patient_data_dict = input_df.iloc[idx].to_dict()
+            response_payload = clean_json(process_single_patient_prediction(patient_data_dict))
+
+            if user:
+                db.session.add(Assessment(
+                    user_id=user.id,
+                    input_data=clean_json(patient_data_dict),
+                    result_data=response_payload,
+                ))
+            evaluations.append(response_payload)
+
+        if user:
+            db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        log.exception("Error executing inference engine or writing to database.")
+        return jsonify({
+            "status": "error",
+            "error": "Prediction failed. Please check your input and try again.",
+        }), 500
+
+    if len(evaluations) == 1:
+        return jsonify(evaluations[0])
+    return jsonify({"status": "success", "batch_count": len(evaluations), "evaluations": evaluations})
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=DEBUG)
