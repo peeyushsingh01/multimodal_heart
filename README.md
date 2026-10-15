@@ -1,3 +1,13 @@
+---
+title: Cardiac 3D App
+emoji: 🫀
+colorFrom: red
+colorTo: blue
+sdk: gradio
+sdk_version: 4.19.0
+app_file: app.py
+pinned: false
+---
 # Multimodal Heart Risk Assessment API
 
 A Flask web application and machine learning API that predicts coronary artery disease (CAD) risk across major coronary vessel branches (LAD, LCX, RCA, CATH) and records assessment history using Render PostgreSQL.
