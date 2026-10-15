@@ -20,3 +20,4 @@ vtk
 requests
 cryptography
 ipython
+nest_asyncio2
